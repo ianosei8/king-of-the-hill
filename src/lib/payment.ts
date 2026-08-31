@@ -69,7 +69,7 @@ export function validateRankingOrder(
   }
   if (
     !Number.isSafeInteger(order.refundableAmount) ||
-    order.refundableAmount < 1
+    order.refundableAmount < 0
   ) {
     return { ok: false, reason: "invalid_refundable_amount" };
   }

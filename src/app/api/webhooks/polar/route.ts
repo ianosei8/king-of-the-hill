@@ -56,6 +56,10 @@ export async function POST(request: Request) {
       const result = await settlePaidOrder(validated.value);
       if (result.kind === "stale") {
         await refundStalePayment(validated.value.attemptId);
+      } else if (result.kind === "manual_review") {
+        throw new Error(
+          `Paid attempt ${validated.value.attemptId} requires manual refund review`
+        );
       }
     }
 

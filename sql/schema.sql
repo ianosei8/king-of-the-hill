@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS rank_attempts (
   polar_order_id       TEXT UNIQUE,
   order_total_cents    INTEGER,
   order_refundable_cents INTEGER,
+  order_refunded_cents INTEGER NOT NULL DEFAULT 0
+    CHECK (order_refunded_cents >= 0),
   state                TEXT NOT NULL DEFAULT 'creating'
     CHECK (
       state IN (
@@ -22,6 +24,7 @@ CREATE TABLE IF NOT EXISTS rank_attempts (
         'open',
         'failed',
         'accepted',
+        'manual_review',
         'refund_pending',
         'refund_processing',
         'refund_submitted',
