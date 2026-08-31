@@ -142,6 +142,26 @@ export type PaidOrderSettlement = {
   refundableAmountCents: number;
 };
 
+function getReplayedSettlementResult(
+  attempt: { state: string; polar_order_id: string | null },
+  orderId: string
+) {
+  if (attempt.polar_order_id !== orderId) return null;
+
+  switch (attempt.state) {
+    case "accepted":
+      return { kind: "accepted" as const, inserted: false };
+    case "refund_pending":
+    case "refund_processing":
+    case "refund_submitted":
+      return { kind: "stale" as const };
+    case "manual_review":
+      return { kind: "manual_review" as const };
+    default:
+      return { kind: "ignored" as const, reason: "already_processed" as const };
+  }
+}
+
 export async function settlePaidOrder(input: PaidOrderSettlement) {
   const sql = getSql();
 
@@ -172,22 +192,8 @@ export async function settlePaidOrder(input: PaidOrderSettlement) {
       return { kind: "ignored" as const, reason: "unknown_attempt" as const };
     }
 
-    if (attempt.polar_order_id === input.orderId) {
-      if (attempt.state === "accepted") {
-        return { kind: "accepted" as const, inserted: false };
-      }
-      if (
-        attempt.state === "refund_pending" ||
-        attempt.state === "refund_processing" ||
-        attempt.state === "refund_submitted"
-      ) {
-        return { kind: "stale" as const };
-      }
-      if (attempt.state === "manual_review") {
-        return { kind: "manual_review" as const };
-      }
-      return { kind: "ignored" as const, reason: "already_processed" as const };
-    }
+    const replayedResult = getReplayedSettlementResult(attempt, input.orderId);
+    if (replayedResult) return replayedResult;
 
     if (attempt.polar_order_id || attempt.state !== "open") {
       return { kind: "ignored" as const, reason: "attempt_not_open" as const };
