@@ -165,6 +165,8 @@ Webhook redelivery may revisit terminal or in-progress states. State checks make
 
 ## Environment and Deployment
 
+The branch promotion, quality-gate, and deployment model is defined separately in [CI/CD Architecture](CICD_ARCHITECTURE.md).
+
 | Variable | Purpose |
 | --- | --- |
 | `APP_URL` | Absolute application origin for Polar return URLs |
@@ -204,6 +206,7 @@ Current unit tests use Node's test runner through `tsx`:
 - `test/unit/checkout-input.test.ts`: normalization and malformed request handling.
 - `test/unit/payment.test.ts`: strict paid-order validation and metadata correlation.
 - `test/unit/polar-checkout.test.ts`: fixed USD, inclusive-tax checkout construction.
+- `test/unit/ranking.test.ts`: settlement outcomes, refund leases, correlation, and cumulative refund ordering with a transaction-capable SQL fake.
 
 Required integration coverage before production:
 
