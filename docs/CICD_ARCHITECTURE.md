@@ -66,7 +66,7 @@ The workflow rejects pull requests that bypass the intended route:
 - Direct pushes to `staging` and `main` must be disabled with GitHub branch rules.
 - Both protected branches must require the `Quality Gate` check before merge.
 
-The source-branch check is enforced in the workflow. Branch protection and required-check settings are repository controls and should be enabled after the new workflow has completed once on each target branch.
+The source-branch check is enforced in the workflow. Classic branch protection is active on both target branches and requires an up-to-date branch, `Quality Gate`, and `SonarCloud Code Analysis` before merge.
 
 ## SonarQube Quality Gate
 
@@ -130,14 +130,15 @@ Application secrets such as `DATABASE_URL`, `POLAR_ACCESS_TOKEN`, and `POLAR_WEB
 
 ## Repository Controls
 
-The repository currently needs these administrative controls to make the architecture mandatory:
+Classic branch protection currently applies these controls to both `staging` and `main`:
 
-1. Protect `staging` and `main` against direct pushes and force pushes.
-2. Require pull requests for both branches.
-3. Require the `Quality Gate` workflow check and SonarQube Cloud analysis check.
-4. Require branches to be current with their target before merge.
-5. Create `staging` and `production` GitHub environments when deployment begins.
-6. Scope deployment secrets to their environment rather than the repository.
+1. Pull requests are required, including for repository administrators.
+2. `Quality Gate` and `SonarCloud Code Analysis` are required checks.
+3. A branch must be current with its target before merge.
+4. Force pushes and branch deletion are disabled.
+5. Review conversations must be resolved before merge.
+
+When deployment begins, create `staging` and `production` GitHub environments and scope deployment secrets to their environment rather than the repository.
 
 ## Implementation Status
 
@@ -147,6 +148,6 @@ The repository currently needs these administrative controls to make the archite
 | Dependency install, validation, build, and tests | Implemented in workflow |
 | LCOV generation and SonarQube import | Implemented |
 | Blocking server-side Quality Gate | Implemented in workflow |
-| Required branch checks | Pending repository rule activation after a green run |
+| Required branch checks | Implemented on `staging` and `main` |
 | Staging deployment and functional verification | Deferred until provider selection |
 | Production deployment | Deferred until provider selection |
