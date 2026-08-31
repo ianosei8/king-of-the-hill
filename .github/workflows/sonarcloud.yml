@@ -29,16 +29,19 @@
 name: Build
 on:
   push:
-    branches:
-      - main
+    branches: [main, staging]
+    
   pull_request:
+    branches: [main, staging]
     types: [opened, synchronize, reopened]
+    
 jobs:
   sonarqube:
     name: SonarQube
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Checkout repository
+        uses: actions/checkout@V7
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
       - name: SonarQube Scan
