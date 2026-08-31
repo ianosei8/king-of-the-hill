@@ -2,6 +2,10 @@
 
 A small pay-to-rank board. The first position costs $1; every later checkout is exactly $1 more than the current leader.
 
+- [MVP product specification](docs/SPEC.md)
+- [Architecture outline](docs/ARCHITECTURE.md)
+- [CI/CD architecture](docs/CICD_ARCHITECTURE.md)
+
 ## Stack
 
 - Next.js 16 with the App Router
@@ -79,6 +83,7 @@ npm run dev
 npm run lint
 npm run typecheck
 npm test
+npm run test:coverage
 npm run build
 npm run check
 ```

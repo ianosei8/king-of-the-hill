@@ -142,6 +142,26 @@ export type PaidOrderSettlement = {
   refundableAmountCents: number;
 };
 
+function getReplayedSettlementResult(
+  attempt: { state: string; polar_order_id: string | null },
+  orderId: string
+) {
+  if (attempt.polar_order_id !== orderId) return null;
+
+  switch (attempt.state) {
+    case "accepted":
+      return { kind: "accepted" as const, inserted: false };
+    case "refund_pending":
+    case "refund_processing":
+    case "refund_submitted":
+      return { kind: "stale" as const };
+    case "manual_review":
+      return { kind: "manual_review" as const };
+    default:
+      return { kind: "ignored" as const, reason: "already_processed" as const };
+  }
+}
+
 export async function settlePaidOrder(input: PaidOrderSettlement) {
   const sql = getSql();
 
@@ -172,19 +192,8 @@ export async function settlePaidOrder(input: PaidOrderSettlement) {
       return { kind: "ignored" as const, reason: "unknown_attempt" as const };
     }
 
-    if (attempt.polar_order_id === input.orderId) {
-      if (attempt.state === "accepted") {
-        return { kind: "accepted" as const, inserted: false };
-      }
-      if (
-        attempt.state === "refund_pending" ||
-        attempt.state === "refund_processing" ||
-        attempt.state === "refund_submitted"
-      ) {
-        return { kind: "stale" as const };
-      }
-      return { kind: "ignored" as const, reason: "already_processed" as const };
-    }
+    const replayedResult = getReplayedSettlementResult(attempt, input.orderId);
+    if (replayedResult) return replayedResult;
 
     if (attempt.polar_order_id || attempt.state !== "open") {
       return { kind: "ignored" as const, reason: "attempt_not_open" as const };
@@ -196,20 +205,29 @@ export async function settlePaidOrder(input: PaidOrderSettlement) {
       attempt.amount_cents === input.totalAmountCents;
 
     if (!matchesAttempt) {
+      const state =
+        input.refundableAmountCents > 0
+          ? "refund_pending"
+          : "manual_review";
       await tx`
         UPDATE rank_attempts
         SET
           polar_order_id = ${input.orderId},
           order_total_cents = ${input.totalAmountCents},
           order_refundable_cents = ${input.refundableAmountCents},
-          state = 'refund_pending',
+          state = ${state},
           updated_at = NOW()
         WHERE id = ${attempt.id}
       `;
-      return {
-        kind: "stale" as const,
-        reason: "payment_mismatch" as const,
-      };
+      return input.refundableAmountCents > 0
+        ? {
+            kind: "stale" as const,
+            reason: "payment_mismatch" as const,
+          }
+        : {
+            kind: "manual_review" as const,
+            reason: "payment_mismatch_not_refundable" as const,
+          };
     }
 
     await tx`LOCK TABLE ranks IN SHARE ROW EXCLUSIVE MODE`;
@@ -222,17 +240,27 @@ export async function settlePaidOrder(input: PaidOrderSettlement) {
     const requiredCents = nextRequiredAmountCents(top?.amount_cents ?? null);
 
     if (input.totalAmountCents < requiredCents) {
+      const state =
+        input.refundableAmountCents > 0
+          ? "refund_pending"
+          : "manual_review";
       await tx`
         UPDATE rank_attempts
         SET
           polar_order_id = ${input.orderId},
           order_total_cents = ${input.totalAmountCents},
           order_refundable_cents = ${input.refundableAmountCents},
-          state = 'refund_pending',
+          state = ${state},
           updated_at = NOW()
         WHERE id = ${attempt.id}
       `;
-      return { kind: "stale" as const, requiredCents };
+      return input.refundableAmountCents > 0
+        ? { kind: "stale" as const, requiredCents }
+        : {
+            kind: "manual_review" as const,
+            reason: "stale_payment_not_refundable" as const,
+            requiredCents,
+          };
     }
 
     await tx`
@@ -256,48 +284,55 @@ export async function settlePaidOrder(input: PaidOrderSettlement) {
 
 export async function claimPendingRefund(attemptId: string) {
   const sql = getSql();
-  const [claimed] = await sql<{
-    polar_order_id: string;
-    order_refundable_cents: number;
-    refund_attempt_count: number;
-  }[]>`
-    UPDATE rank_attempts
-    SET
-      state = 'refund_processing',
-      refund_attempt_count = refund_attempt_count + 1,
-      updated_at = NOW()
-    WHERE
-      id = ${attemptId}
-      AND polar_order_id IS NOT NULL
-      AND order_refundable_cents > 0
-      AND (
-        state = 'refund_pending'
-        OR (
-          state = 'refund_processing'
-          AND updated_at < NOW() - INTERVAL '30 seconds'
-        )
-      )
-    RETURNING
-      polar_order_id,
-      order_refundable_cents,
-      refund_attempt_count
-  `;
+  return sql.begin(async (tx) => {
+    const [attempt] = await tx<{
+      state: string;
+      polar_order_id: string | null;
+      order_refundable_cents: number | null;
+      refund_attempt_count: number;
+      lease_expired: boolean;
+    }[]>`
+      SELECT
+        state,
+        polar_order_id,
+        order_refundable_cents,
+        refund_attempt_count,
+        updated_at < NOW() - INTERVAL '30 seconds' AS lease_expired
+      FROM rank_attempts
+      WHERE id = ${attemptId}
+      FOR UPDATE
+    `;
 
-  if (claimed) {
+    if (!attempt) return { kind: "done" as const };
+    if (attempt.state === "refund_processing" && !attempt.lease_expired) {
+      return { kind: "busy" as const };
+    }
+
+    const canClaim =
+      (attempt.state === "refund_pending" ||
+        (attempt.state === "refund_processing" && attempt.lease_expired)) &&
+      attempt.polar_order_id !== null &&
+      attempt.order_refundable_cents !== null &&
+      attempt.order_refundable_cents > 0;
+    if (!canClaim) return { kind: "done" as const };
+
+    const refundAttemptCount = attempt.refund_attempt_count + 1;
+    await tx`
+      UPDATE rank_attempts
+      SET
+        state = 'refund_processing',
+        refund_attempt_count = ${refundAttemptCount},
+        updated_at = NOW()
+      WHERE id = ${attemptId}
+    `;
+
     return {
       kind: "claimed" as const,
-      orderId: claimed.polar_order_id,
-      amountCents: claimed.order_refundable_cents,
-      shouldReconcile: claimed.refund_attempt_count > 1,
+      orderId: attempt.polar_order_id as string,
+      amountCents: attempt.order_refundable_cents as number,
+      shouldReconcile: refundAttemptCount > 1,
     };
-  }
-
-  const [current] = await sql<{ state: string }[]>`
-    SELECT state FROM rank_attempts WHERE id = ${attemptId}
-  `;
-  return current?.state === "refund_processing"
-    ? { kind: "busy" as const }
-    : { kind: "done" as const };
+  });
 }
 
 export async function releaseRefundClaim(attemptId: string) {
@@ -383,8 +418,14 @@ export async function recordOrderRefunded(input: {
       product_id: string;
       polar_checkout_id: string | null;
       polar_order_id: string | null;
+      order_refunded_cents: number;
     }[]>`
-      SELECT id, product_id, polar_checkout_id, polar_order_id
+      SELECT
+        id,
+        product_id,
+        polar_checkout_id,
+        polar_order_id,
+        order_refunded_cents
       FROM rank_attempts
       WHERE id = ${input.attemptId}
       FOR UPDATE
@@ -393,7 +434,8 @@ export async function recordOrderRefunded(input: {
       !attempt ||
       attempt.product_id !== input.productId ||
       attempt.polar_checkout_id !== input.checkoutId ||
-      (attempt.polar_order_id && attempt.polar_order_id !== input.orderId)
+      (attempt.polar_order_id && attempt.polar_order_id !== input.orderId) ||
+      input.refundedAmountCents <= attempt.order_refunded_cents
     ) {
       return { kind: "ignored" as const };
     }
@@ -410,6 +452,7 @@ export async function recordOrderRefunded(input: {
         polar_order_id = ${input.orderId},
         order_total_cents = ${input.totalAmountCents},
         order_refundable_cents = ${input.refundableAmountCents},
+        order_refunded_cents = ${input.refundedAmountCents},
         state = ${input.refundableAmountCents > 0
           ? "refund_pending"
           : "refunded"},

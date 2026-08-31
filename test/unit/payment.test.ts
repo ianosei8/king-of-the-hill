@@ -72,3 +72,7 @@ test("orders without app-owned metadata are ignored", () => {
     false
   );
 });
+
+test("balance-funded paid orders remain eligible for DB settlement", () => {
+  assert.equal(validateRankingOrder({ ...order, refundableAmount: 0 }).ok, true);
+});
